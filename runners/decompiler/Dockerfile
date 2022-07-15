@@ -44,7 +44,7 @@ ENTRYPOINT [ "./entrypoint.sh", "decompile_bn.py" ]
 
 # angr
 FROM base-x86 as angr
-RUN pip install --user 'angr>=9.2.1,<10.0'
+RUN pip install --user 'angr>=9.2.10,<10.0'
 COPY decompile_angr.py .
 
 COPY entrypoint.sh .
@@ -155,7 +155,7 @@ RUN git clone https://github.com/uxmal/reko.git \
     && dotnet msbuild -p:Platform=x64 -p:Configuration=Release -t:create_release -m ./src/BuildTargets/BuildTargets.csproj \
     && cp bin/CmdLine*.zip ../CmdLine.zip \
     && cd .. \
-    && rm -rf reko
+    && rm -rf reko .nuget
 
 RUN mkdir reko \
     && cd reko \
