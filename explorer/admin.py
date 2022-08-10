@@ -2,6 +2,8 @@ from django.contrib import admin
 from django.utils import timezone
 from django.utils.safestring import mark_safe
 
+from rest_framework.reverse import reverse
+
 from .models import Decompilation, DecompilationRequest, Decompiler, Binary
 
 
@@ -9,14 +11,20 @@ from .models import Decompilation, DecompilationRequest, Decompiler, Binary
 class DecompilationRequestAdmin(admin.ModelAdmin):
 	model = DecompilationRequest
 	ordering = ('-created', 'decompiler')
-	list_display = ('created', 'decompiler', 'binary', 'completed', 'last_attempted', 'id')
+	list_display = ('created', 'decompiler', '_binary', 'completed', 'last_attempted', 'id')
+
+	def _binary(self, instance):
+		return mark_safe(f'<a href="/?id={instance.binary.id}">{instance.binary.id}</a>')
 
 
 @admin.register(Decompilation)
 class DecompilationAdmin(admin.ModelAdmin):
 	model = Decompilation
 	ordering = ('-created', 'decompiler')
-	list_display = ('created', 'decompiler', 'binary', '_succeeded', 'id')
+	list_display = ('created', 'decompiler', '_binary', '_succeeded', 'id')
+
+	def _binary(self, instance):
+		return mark_safe(f'<a href="/?id={instance.binary.id}">{instance.binary.id}</a>')
 
 	def _succeeded(self, instance):
 		return instance.succeeded
@@ -47,7 +55,13 @@ class DecompilerAdmin(admin.ModelAdmin):
 class BinaryAdmin(admin.ModelAdmin):
 	model = Binary
 	ordering = ('-created', 'hash')
-	list_display = ('created', 'file', '_id')
+	list_display = ('created', '_file', '_id')
+	list_filter = ('featured',)
+	search_fields = ('id', 'hash')
+
+	def _file(self, instance):
+		download_url = reverse('binary-download', args=[instance.pk])
+		return mark_safe(f'<a href="{download_url}">{instance.file}</a>')
 
 	def _id(self, instance):
 		return mark_safe(f'<a href="/?id={instance.id}">{instance.id}</a>')

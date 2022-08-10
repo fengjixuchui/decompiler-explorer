@@ -1,6 +1,7 @@
 import hashlib
 import itertools
 import uuid
+from collections import OrderedDict
 
 from datetime import timedelta
 
@@ -11,6 +12,9 @@ from django.db.models.constraints import UniqueConstraint, CheckConstraint
 from django.dispatch import receiver
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
+
+
+HEALTHY_CUTOFF = timedelta(minutes=1)
 
 
 def binary_upload_path(instance, filename):
@@ -31,6 +35,9 @@ class Binary(models.Model):
     featured = models.BooleanField(default=False)
     featured_name = models.TextField(max_length=128, null=True)
 
+    class Meta:
+        verbose_name_plural = "binaries"
+
     def __str__(self):
         return f'Binary: {self.hash}'
 
@@ -46,7 +53,10 @@ class Decompiler(models.Model):
     created = models.DateTimeField(default=timezone.now, editable=False)
 
     def __str__(self):
-        return f'Decompiler: {self.name} {self.version} {self.revision[:8]}'
+        if len(self.revision) > 0:
+            return f'Decompiler: {self.name} {self.version} {self.revision[:8]}'
+        else:
+            return f'Decompiler: {self.name} {self.version}'
 
     def __lt__(self, other):
         if not isinstance(other, (Decompiler,)):
@@ -59,22 +69,33 @@ class Decompiler(models.Model):
                     return True
                 elif int(this_version[i]) > int(other_version[i]):
                     return False
-            except:
+            except ValueError:
                 if this_version[i] < other_version[i]:
                     return True
                 elif this_version[i] > other_version[i]:
                     return False
-        return len(this_version) < len(other_version)
+        if len(this_version) < len(other_version):
+            return True
+        if len(this_version) > len(other_version):
+            return False
+        if self.last_health_check < other.last_health_check:
+            return True
+        if self.last_health_check > other.last_health_check:
+            return False
+        return False
 
     @classmethod
     def healthy_latest_versions(cls):
         latest_versions = {}
-        healthy_cutoff = timezone.now() - timedelta(minutes=1)
 
-        for decompiler in Decompiler.objects.filter(last_health_check__gte=healthy_cutoff):
+        for decompiler in Decompiler.objects.filter(last_health_check__gte=timezone.now() - HEALTHY_CUTOFF):
             if decompiler.name not in latest_versions or latest_versions[decompiler.name] < decompiler:
                 latest_versions[decompiler.name] = decompiler
-        return latest_versions.values()
+        return latest_versions
+
+    @property
+    def healthy(self):
+        return self.last_health_check >= (timezone.now() - HEALTHY_CUTOFF)
 
 
 class DecompilationRequest(models.Model):
@@ -92,6 +113,41 @@ class DecompilationRequest(models.Model):
         constraints = [
             UniqueConstraint(fields=['binary', 'decompiler'], name='unique_binary_decompiler')
         ]
+
+    @staticmethod
+    def unfulfilled():
+        queryset = DecompilationRequest.objects.all()
+        queryset = queryset.filter(completed=False)
+        queryset = queryset.filter(decompiler__last_health_check__gte=timezone.now() - HEALTHY_CUTOFF)
+        return queryset
+
+    @staticmethod
+    def get_queue():
+        queue = OrderedDict()
+
+        for d in sorted(Decompiler.healthy_latest_versions().values(), key=lambda d: d.id):
+            unfulfilled = DecompilationRequest.unfulfilled().filter(decompiler__id=d.id).order_by('created')
+            oldest_unfinished = unfulfilled.first()
+            if oldest_unfinished is not None:
+                oldest_unfinished = oldest_unfinished.created
+            queue[str(d.id)] = {
+                'oldest_unfinished': oldest_unfinished,
+                'queue_length': unfulfilled.count()
+            }
+
+        unfulfilled = DecompilationRequest.unfulfilled().order_by('created')
+        oldest_unfinished = unfulfilled.first()
+        if oldest_unfinished is not None:
+            oldest_unfinished = oldest_unfinished.created
+        general_queue = {
+            'oldest_unfinished': oldest_unfinished,
+            'queue_length': unfulfilled.count()
+        }
+
+        return {
+            'general': general_queue,
+            'per_decompiler': queue
+        }
 
 
 class Decompilation(models.Model):
@@ -127,9 +183,28 @@ class Decompilation(models.Model):
     def failed(self) -> bool:
         return self.error is not None or self.decompiled_file is None
 
+
+def rerun_decompilation_request(binary: Binary, decompiler: Decompiler):
+    existing_req = DecompilationRequest.objects.filter(binary=binary, decompiler=decompiler).all()
+    if len(existing_req) == 0:
+        existing_req = None
+    else:
+        existing_req = existing_req[0]
+
+    if existing_req is not None:
+        if not existing_req.completed:
+            raise ValueError("Trying to rerun incomplete request")
+
+        existing_req.decompilation.delete()
+        existing_req.delete()
+
+    DecompilationRequest.objects.create(binary=binary, decompiler=decompiler)
+
+
 @receiver(post_save, sender=Binary)
 def create_decompilation_requests(sender, instance, created, *args, **kwargs):
-    for decompiler in Decompiler.healthy_latest_versions():
+    # TODO: Whenever multi-version is ready, send to what the user requests
+    for decompiler in Decompiler.healthy_latest_versions().values():
         if not DecompilationRequest.objects.filter(binary=instance, decompiler=decompiler).exists():
             DecompilationRequest.objects.create(binary=instance, decompiler=decompiler)
 

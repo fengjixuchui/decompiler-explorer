@@ -44,6 +44,12 @@ ENTRYPOINT [ "./entrypoint.sh", "decompile_bn.py" ]
 
 # angr
 FROM base-x86 as angr
+USER root
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+USER decompiler_user
 RUN pip install --user 'angr>=9.2.10,<10.0'
 COPY decompile_angr.py .
 
@@ -60,7 +66,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 USER decompiler_user
 
-RUN wget https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_10.1.4_build/ghidra_10.1.4_PUBLIC_20220519.zip -O ghidra.zip \
+RUN wget https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_10.1.5_build/ghidra_10.1.5_PUBLIC_20220726.zip -O ghidra.zip \
     && unzip ghidra.zip \
     && rm ghidra.zip \
     && mv ghidra_* ghidra
@@ -212,3 +218,43 @@ COPY decompile_hexrays.py .
 COPY entrypoint.sh .
 COPY runner_generic.py .
 ENTRYPOINT [ "./entrypoint.sh", "decompile_hexrays.py" ]
+
+# Relyze
+FROM base-x86 as relyze
+USER root
+RUN apt-get update \
+	&& apt-get install -y --no-install-recommends wget
+RUN wget -nc --no-check-certificate -O /usr/share/keyrings/winehq-archive.key https://dl.winehq.org/wine-builds/winehq.key \
+	&& wget -nc --no-check-certificate -P /etc/apt/sources.list.d/ https://dl.winehq.org/wine-builds/debian/dists/bullseye/winehq-bullseye.sources
+RUN dpkg --add-architecture i386 \
+	&& apt-get update \
+	&& apt-get install -y --no-install-recommends winehq-stable \
+	&& rm -rf /var/lib/apt/lists/*
+RUN wget -nc -O /innoextract_amd64.deb https://download.opensuse.org/repositories/home:/dscharrer/Debian_11/amd64/innoextract_1.9-0.1_amd64.deb \
+	&& apt-get update \
+	&& apt-get install -y --no-install-recommends /innoextract_amd64.deb \
+	&& rm /innoextract_amd64.deb \
+	&& rm -rf /var/lib/apt/lists/*
+
+USER decompiler_user
+WORKDIR /home/decompiler_user
+
+RUN wget -O ./update_win64.xml https://www.relyze.com/update?family=RLZ\&plat=win\&arch=x64 \
+	&& wget -O ./Relyze_Desktop_x_x_x_win64.exe https://www.relyze.com/$(grep -oP "(?<=<Installer>)(\S+)(?=</Installer>)" update_win64.xml) \
+	&& rm ./update_win64.xml
+RUN innoextract  -d ./RelyzeDesktop ./Relyze_Desktop_x_x_x_win64.exe \
+	&& rm ./Relyze_Desktop_x_x_x_win64.exe
+ENV WINEPREFIX=/home/decompiler_user/.wine-relyze
+RUN winecfg 2>/dev/null && wineserver --kill
+ENV WINEDLLOVERRIDES="dbghelp=n;symsrv=n"
+RUN rm -rf $WINEPREFIX/drive_c/users/decompiler_user/Documents
+RUN mkdir $WINEPREFIX/drive_c/users/decompiler_user/Documents
+RUN ln -s /home/decompiler_user/RelyzeDesktop/commonappdata/Relyze64 $WINEPREFIX/drive_c/ProgramData/Relyze64
+RUN mkdir -p $WINEPREFIX/drive_c/users/decompiler_user/AppData/Roaming/Relyze
+
+COPY tools/relyze/License.txt $WINEPREFIX/drive_c/users/decompiler_user/AppData/Roaming/Relyze
+COPY tools/relyze/decompiler_explorer.rb .
+COPY decompile_relyze.py .
+COPY entrypoint.sh .
+COPY runner_generic.py .
+ENTRYPOINT [ "./entrypoint.sh", "decompile_relyze.py" ]
