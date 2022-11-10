@@ -87,7 +87,7 @@ RUN apt-get update \
 
 USER decompiler_user
 WORKDIR /home/decompiler_user
-RUN git clone https://github.com/yegord/snowman.git \
+RUN git clone --depth=1 https://github.com/yegord/snowman.git \
     && cmake -B snowman/build -DNC_QT5=YES -DCMAKE_INSTALL_PREFIX=install snowman/src/ \
     && cmake --build snowman/build -j$(nproc) \
     && cmake --install snowman/build \
@@ -149,12 +149,12 @@ RUN apt-get update \
     && apt-get update \
     && apt-get install -y apt-transport-https \
     && apt-get update \
-    && apt-get install -y dotnet-sdk-5.0 \
+    && apt-get install -y dotnet-sdk-6.0 \
     && rm -rf /var/lib/apt/lists/*
 
 USER decompiler_user
 WORKDIR /home/decompiler_user
-RUN git clone https://github.com/uxmal/reko.git \
+RUN git clone --depth=1 https://github.com/uxmal/reko.git \
     && cd reko \
     && dotnet msbuild -p:Platform=x64 -p:Configuration=UnixRelease -t:build_solution -m ./src/BuildTargets/BuildTargets.csproj \
     && dotnet msbuild -p:Platform=x64 -p:Configuration=Release -t:create_runtime_nupkg -m ./src/BuildTargets/BuildTargets.csproj \
@@ -218,6 +218,26 @@ COPY decompile_hexrays.py .
 COPY entrypoint.sh .
 COPY runner_generic.py .
 ENTRYPOINT [ "./entrypoint.sh", "decompile_hexrays.py" ]
+
+# Dewolf
+FROM binja as dewolf
+
+USER root
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends astyle libgraph-easy-perl git \
+    && pip install pipenv \
+    && rm -rf /var/lib/apt/lists/*
+
+USER decompiler_user
+WORKDIR /home/decompiler_user
+
+RUN git clone --depth=1 --branch=v0.1.3 https://github.com/fkie-cad/dewolf.git \
+    && cd dewolf \
+    && pipenv install -r ./requirements.txt \
+    && pipenv run python /home/decompiler_user/binaryninja/scripts/install_api.py
+
+COPY decompile_dewolf.py .
+ENTRYPOINT [ "./entrypoint.sh", "decompile_dewolf.py" ]
 
 # Relyze
 FROM base-x86 as relyze
